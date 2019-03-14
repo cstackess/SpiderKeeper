@@ -1,6 +1,7 @@
+# -*- coding: utf-8 -*-
 import datetime
 from sqlalchemy import desc
-from SpiderKeeper.app import db, Base
+from SpiderKeeper.app import db, Base, app
 
 
 class Project(Base):
@@ -62,13 +63,27 @@ class SpiderInstance(Base):
 
     @classmethod
     def list_spiders(cls, project_id):
-        sql_last_runtime = '''
-            select * from (select a.spider_name,b.date_created from sk_job_instance as a
-                left join sk_job_execution as b
-                on a.id = b.job_instance_id
-                order by b.date_created desc) as c
-                group by c.spider_name
-            '''
+        # TODO 这到底啥意思？用spider_name区分？
+        # 要区分不同数据库的语法！为postgres增加
+        url = app.config.get('SQLALCHEMY_DATABASE_URI')
+        if url.startswith('sqlite'):
+            sql_last_runtime = '''
+                        select * from (select a.spider_name,b.date_created from sk_job_instance as a
+                            left join sk_job_execution as b
+                            on a.id = b.job_instance_id
+                            order by b.date_created desc) as c
+                            group by c.spider_name
+                        '''
+        else:
+            sql_last_runtime = '''  
+                select c.spider_name,c.date_created from 
+                (select a.spider_name,b.date_created,row_number() over(partition by a.spider_name order by b.date_created desc)rn 
+                    from sk_job_instance as a
+                    left join sk_job_execution as b
+                    on a.id = b.job_instance_id
+                )as c
+                where c.rn=1; 
+                '''
         sql_avg_runtime = '''
             select a.spider_name,avg(end_time-start_time) from sk_job_instance as a
                 left join sk_job_execution as b
@@ -120,7 +135,7 @@ class JobInstance(Base):
         return dict(
             job_instance_id=self.id,
             spider_name=self.spider_name,
-            tags=self.tags.split(',') if self.tags else None,
+            tags=self.tags.split(',') if self.tags else None,  # TODO　UTF-8
             spider_arguments=self.spider_arguments,
             priority=self.priority,
             desc=self.desc,
@@ -153,9 +168,9 @@ class JobExecution(Base):
     project_id = db.Column(db.INTEGER, nullable=False, index=True)
     service_job_execution_id = db.Column(db.String(50), nullable=False, index=True)
     job_instance_id = db.Column(db.INTEGER, nullable=False, index=True)
-    create_time = db.Column(db.DATETIME)
-    start_time = db.Column(db.DATETIME)
-    end_time = db.Column(db.DATETIME)
+    create_time = db.Column(db.TIMESTAMP)
+    start_time = db.Column(db.TIMESTAMP)
+    end_time = db.Column(db.TIMESTAMP)
     running_status = db.Column(db.INTEGER, default=SpiderStatus.PENDING)
     running_on = db.Column(db.Text)
 
@@ -201,7 +216,7 @@ class JobExecution(Base):
         result['COMPLETED'] = [job_execution.to_dict() for job_execution in
                                JobExecution.query.filter(JobExecution.project_id == project_id).filter(
                                    (JobExecution.running_status == SpiderStatus.FINISHED) | (
-                                       JobExecution.running_status == SpiderStatus.CANCELED)).order_by(
+                                           JobExecution.running_status == SpiderStatus.CANCELED)).order_by(
                                    desc(JobExecution.date_modified)).limit(each_status_limit)]
         return result
 

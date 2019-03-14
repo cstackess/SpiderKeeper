@@ -9,6 +9,7 @@ DEBUG = True
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
 SQLALCHEMY_DATABASE_URI = 'sqlite:///' + os.path.join(os.path.abspath('.'), 'SpiderKeeper.db')
+
 SQLALCHEMY_TRACK_MODIFICATIONS = False
 DATABASE_CONNECT_OPTIONS = {}
 
@@ -23,10 +24,10 @@ CSRF_ENABLED = True
 
 # Use a secure, unique and absolutely secret key for
 # signing the data.
-CSRF_SESSION_KEY = "secret"
+CSRF_SESSION_KEY = "fhsjlhnxuh@*udjskkavdvkodv"
 
 # Secret key for signing cookies
-SECRET_KEY = "secret"
+SECRET_KEY = "mmqniganjinhuilaiba@womenxiangnile~#"
 
 # log
 LOG_LEVEL = 'INFO'

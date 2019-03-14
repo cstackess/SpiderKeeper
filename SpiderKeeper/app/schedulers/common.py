@@ -39,6 +39,8 @@ def run_spider_job(job_instance_id):
             job_instance.project_id, job_instance.spider_name, job_instance.id))
     except Exception as e:
         app.logger.error('[run_spider_job] ' + str(e))
+        db.session.rollback()
+        app.logger.info('now roll back!') # TODO
 
 
 def reload_runnable_spider_job_execution():

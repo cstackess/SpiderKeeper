@@ -1,4 +1,5 @@
 import datetime
+import json
 import os
 import tempfile
 
@@ -258,8 +259,31 @@ class JobCtrl(flask_restful.Resource):
             db.session.commit()
             return True
 
+    # TODO update
+    # def put(self, project_id):
+    #     post_data = request.form
+    #     if post_data:
+    #         job_instance = JobInstance.query.filter_by(project_id=project_id).first()
+    #         job_instance.spider_name = post_data['spider_name']
+    #         job_instance.project_id = project_id
+    #         job_instance.spider_arguments = post_data.get('spider_arguments')
+    #         job_instance.desc = post_data.get('desc')
+    #         job_instance.tags = post_data.get('tags')
+    #         job_instance.run_type = post_data['run_type']
+    #         job_instance.priority = post_data.get('priority', 0)
+    #         if job_instance.run_type == "periodic":
+    #             job_instance.cron_minutes = post_data.get('cron_minutes') or '0'
+    #             job_instance.cron_hour = post_data.get('cron_hour') or '*'
+    #             job_instance.cron_day_of_month = post_data.get('cron_day_of_month') or '*'
+    #             job_instance.cron_day_of_week = post_data.get('cron_day_of_week') or '*'
+    #             job_instance.cron_month = post_data.get('cron_month') or '*'
+    #         db.session.add(job_instance)
+    #         db.session.commit()
+    #         return True
+
 
 class JobDetailCtrl(flask_restful.Resource):
+
     @swagger.operation(
         summary='update job instance',
         notes="json keys: <br>" + "<br>".join(JOB_INSTANCE_FIELDS),
@@ -480,6 +504,8 @@ def utility_processor():
         return readable_time(total_seconds)
 
     def readable_time(total_seconds):
+        if isinstance(total_seconds, datetime.timedelta):  # FIX BUG OF
+            total_seconds = total_seconds.total_seconds()
         if not total_seconds:
             return '-'
         if total_seconds < 60:
@@ -538,9 +564,62 @@ def job_dashboard(project_id):
 def job_periodic(project_id):
     project = Project.find_project_by_id(project_id)
     job_instance_list = [job_instance.to_dict() for job_instance in
-                         JobInstance.query.filter_by(run_type="periodic", project_id=project_id).all()]
+                         JobInstance.query.filter_by(run_type="periodic", project_id=project_id).order_by(
+                             JobInstance.id).all()]  # ADD order_by
     return render_template("job_periodic.html",
                            job_instance_list=job_instance_list)
+
+
+@app.route("/project/<project_id>/job/<job_id>")
+def job_get(project_id, job_id):
+    # JobInstance.query.filter_by(project_id=project_id, id=job_id).first().to_dict()
+    job_instance = JobInstance.find_job_instance_by_id(job_id).to_dict()
+    # app.logger.info(job_instance)
+    return json.dumps(job_instance)
+
+
+# TODO add update
+@app.route("/project/<project_id>/job/<job_id>/update", methods=['post'])
+def job_update(project_id, job_id):
+    project = Project.find_project_by_id(project_id)
+    job_instance = JobInstance.find_job_instance_by_id(job_id)
+    # app.logger.info("aaaaaaaaaaaa")
+    # app.logger.info(job_instance)
+    # if job_instance is None:
+    #     print(job_instance)
+    #     abort(404)
+    job_instance.spider_name = request.form['spider_name']
+    job_instance.project_id = project_id
+    job_instance.spider_arguments = request.form['spider_arguments']
+    job_instance.desc = request.form['desc']
+    job_instance.tags = request.form.get('spider_tags', "")
+    job_instance.priority = request.form.get('priority', 0)
+    job_instance.run_type = request.form['run_type']
+    # chose daemon manually
+    if request.form['daemon'] != 'auto':
+        spider_args = []
+        if request.form['spider_arguments']:
+            spider_args = request.form['spider_arguments'].split(",")
+        spider_args.append("daemon={}".format(request.form['daemon']))
+        job_instance.spider_arguments = ','.join(spider_args)
+    if job_instance.run_type == JobRunType.ONETIME:
+        job_instance.enabled = -1
+        db.session.add(job_instance)
+        db.session.commit()
+        agent.start_spider(job_instance)
+    if job_instance.run_type == JobRunType.PERIODIC:
+        job_instance.cron_minutes = request.form.get('cron_minutes') or '0'
+        job_instance.cron_hour = request.form.get('cron_hour') or '*'
+        job_instance.cron_day_of_month = request.form.get('cron_day_of_month') or '*'
+        job_instance.cron_day_of_week = request.form.get('cron_day_of_week') or '*'
+        job_instance.cron_month = request.form.get('cron_month') or '*'
+        # set cron exp manually
+        if request.form.get('cron_exp'):
+            job_instance.cron_minutes, job_instance.cron_hour, job_instance.cron_day_of_month, job_instance.cron_day_of_week, job_instance.cron_month = \
+                request.form['cron_exp'].split(' ')
+        db.session.add(job_instance)
+        db.session.commit()
+    return redirect(request.referrer, code=302)
 
 
 @app.route("/project/<project_id>/job/add", methods=['post'])
@@ -550,6 +629,8 @@ def job_add(project_id):
     job_instance.spider_name = request.form['spider_name']
     job_instance.project_id = project_id
     job_instance.spider_arguments = request.form['spider_arguments']
+    job_instance.desc = request.form['desc']
+    job_instance.tags = request.form.get('spider_tags', "")
     job_instance.priority = request.form.get('priority', 0)
     job_instance.run_type = request.form['run_type']
     # chose daemon manually
@@ -587,12 +668,16 @@ def job_stop(project_id, job_exec_id):
 
 
 @app.route("/project/<project_id>/jobexecs/<job_exec_id>/log")
-def job_log(project_id, job_exec_id):
+@app.route("/project/<project_id>/jobexecs/<job_exec_id>/log/<int:last_line>")  # ADD line_cnt
+def job_log(project_id, job_exec_id, last_line=None):
     job_execution = JobExecution.query.filter_by(project_id=project_id, id=job_exec_id).first()
     res = requests.get(agent.log_url(job_execution))
     res.encoding = 'utf8'
     raw = res.text
-    return render_template("job_log.html", log_lines=raw.split('\n'))
+    log_lines = raw.split('\n')
+    if last_line != None:
+        log_lines = log_lines[-last_line:]
+    return render_template("job_log.html", log_lines=log_lines)
 
 
 @app.route("/project/<project_id>/job/<job_instance_id>/run")
